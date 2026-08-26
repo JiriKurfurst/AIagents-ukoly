@@ -1,354 +1,200 @@
 # Gmail AI Agent
 
-Třetí úkol v rámci kurzu **AI agenti**.
-
-Cílem projektu je vytvořit AI agenta, který pracuje s reálnou Gmail schránkou, analyzuje příchozí e-maily pomocí LLM a podle jejich obsahu automaticky rozhoduje o další akci.
-
-Agent je vytvořen v Pythonu a využívá Gmail API a lokálně provozovaný LLM.
-
----
+AI agent pro automatické třídění Gmailu a jednoduchý chat nad e-mailovou
+schránkou. Projekt vznikl jako úkol v rámci kurzu **AI agenti**.
 
 ## Co agent umí
 
-Agent:
+Agent propojuje **Python + Gmail API + OpenAI Agents SDK + lokální LLM
+(Ollama / Llama 3.1 8B)**.
 
-1. Připojí se k Gmailu pomocí Gmail API a OAuth 2.0.
-2. Načte nové, dosud nezpracované e-maily.
-3. Získá z e-mailu odesílatele, předmět a obsah zprávy.
-4. Předá obsah LLM ke klasifikaci.
-5. Rozhodne o kategorii e-mailu.
-6. Podle výsledku provede odpovídající akci v Gmailu.
-7. Označí e-mail štítkem `AI_PROCESSED`, aby nebyl při dalším spuštění zpracován znovu.
-8. Průběh zpracování zapisuje do terminálu a log souboru.
-9. Po dokončení zobrazí celkovou dobu běhu.
+Má tři režimy:
 
----
+-   **cleanup** -- projde historickou poštu a roztřídí ji.
+-   **live** -- zpracuje nové, dosud nezpracované zprávy v Inboxu.
+-   **chat** -- umožní přirozené dotazy nad Gmailem, například „Kolik
+    e-mailů mi přišlo za posledních 30 dní?" nebo „Najdi posledních 5
+    důležitých e-mailů."
 
-## Kategorie e-mailů
+Chat je záměrně **read-only** -- vyhledává a analyzuje, ale nemění
+poštu.
 
-Agent používá následující kategorie:
+## Jak klasifikace funguje
 
-### IMPORTANT
+Každý e-mail dostane jednu kategorii:
 
-E-mail vyžaduje pozornost uživatele, například:
+  -----------------------------------------------------------------------
+  Kategorie               Význam                  Akce
+  ----------------------- ----------------------- -----------------------
+  `IMPORTANT`             vyžaduje pozornost,     označení jako důležité
+                          odpověď nebo rozhodnutí 
 
-- žádost o rozhodnutí,
-- žádost o schválení,
-- přímý úkol nebo otázka,
-- důležitá změna,
-- zrušení schůzky,
-- problém s doručením zprávy.
+  `NORMAL`                běžná informační zpráva bez změny
 
-**Akce:** e-mail je označen jako důležitý.
+  `ADVERTISEMENT`         reklama, newsletter,    archivace
+                          marketing               
 
-### ADVERTISEMENT
+  `UNCERTAIN`             agent si není           bez změny, určeno k
+                          dostatečně jistý        auditu
+  -----------------------------------------------------------------------
 
-Reklamní, marketingové nebo automatické obsahové zprávy, například:
+Každá zpracovaná zpráva dostane `AI_PROCESSED` a klasifikační štítek
+`AI_IMPORTANT`, `AI_NORMAL`, `AI_ADVERTISEMENT` nebo `AI_UNCERTAIN`.
 
-- newslettery,
-- reklamní nabídky,
-- slevové kampaně,
-- marketingové e-maily,
-- vybrané automatické notifikace sociálních sítí.
+**Reklamy se nemažou.** Pouze se odstraní z Inboxu a zůstávají dostupné
+ve „Všechny zprávy" a pod štítkem `AI_ADVERTISEMENT`.
 
-**Akce:** e-mail je archivován.
+## Jak agent rozhoduje
 
-### NORMAL
+Klasifikace je hybridní:
 
-Běžná informační komunikace, která nevyžaduje konkrétní rozhodnutí nebo akci.
-
-**Akce:** e-mail zůstává beze změny.
-
-### UNCERTAIN
-
-Agent nemá dostatek informací pro spolehlivé rozhodnutí.
-
-**Akce:** e-mail zůstává beze změny.
-
----
-
-## Architektura
-
-Zjednodušený princip:
-
-```text
-Gmail
-  │
-  ▼
-Gmail API
-  │
-  ▼
-Python Gmail AI Agent
-  │
-  ├── načtení e-mailu
-  │
-  ▼
-LLM
-  │
-  ├── IMPORTANT
-  ├── ADVERTISEMENT
-  ├── NORMAL
-  └── UNCERTAIN
-  │
-  ▼
-Rozhodnutí agenta
-  │
-  ├── označit IMPORTANT
-  ├── archivovat
-  └── ponechat beze změny
-  │
-  ▼
-Gmail API
-  │
-  ▼
-AI_PROCESSED
+``` text
+Gmail → Python → pravidla / LLM → kategorie → AI agent → tool → Gmail API
 ```
 
-Díky štítku `AI_PROCESSED` agent při dalším spuštění zpracovává pouze zprávy, které ještě nebyly vyhodnoceny.
+Jednoznačné případy řeší deterministická pravidla. Složitější zprávy
+jsou předány lokálnímu LLM. Agent může využít také kontext e-mailového
+vlákna.
 
----
+Pro Gmail akce používá skutečné **function tools**. Součástí řešení je
+kontrola správného toolu, retry mechanismus a deterministický fallback.
 
-## Použitý LLM
+## Chat nad Gmailem
 
-Projekt byl během vývoje testován s lokálně provozovaným modelem:
+V režimu `chat` agent používá read-only tools pro počítání e-mailů,
+vyhledávání zpráv, načtení detailu e-mailu a statistiky AI klasifikace.
 
-```text
-llama3.1:8b
+Příklady:
+
+``` text
+Kolik e-mailů mi přišlo za posledních 30 dní?
+Kolik reklam agent našel?
+Najdi posledních 5 důležitých e-mailů.
+Najdi e-maily od České spořitelny.
+Ukaž posledních 10 AI_UNCERTAIN zpráv.
 ```
 
-LLM server poskytuje OpenAI-compatible API.
-
-Příklad:
-
-```text
-http://<LLM_SERVER>:11434/v1
-```
-
-Konkrétní IP adresa interního LLM serveru není součástí repozitáře.
-
----
-
-## Gmail API
-
-Pro komunikaci s Gmailem je použito:
-
-- Gmail API
-- OAuth 2.0
-- Desktop OAuth Client
-
-Uživatel při prvním spuštění autorizuje aplikaci ve svém Google účtu.
-
-Projekt používá oprávnění umožňující čtení a úpravu zpráv, protože agent provádí akce jako označení důležitého e-mailu nebo archivace.
-
----
-
-## Instalace
-
-Doporučená verze:
-
-```text
-Python 3.12
-```
-
-Vytvoření virtuálního prostředí:
-
-```powershell
-python -m venv .venv
-```
-
-Aktivace ve Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Instalace závislostí:
-
-```powershell
-pip install -r requirements.txt
-```
-
----
-
-## Google OAuth credentials
-
-Pro spuštění je nutné vytvořit vlastní OAuth 2.0 credentials v Google Cloud Console.
-
-Postup:
-
-1. vytvořit Google Cloud projekt,
-2. aktivovat Gmail API,
-3. nastavit OAuth consent screen,
-4. vytvořit OAuth Client ID typu **Desktop app**,
-5. stáhnout JSON credentials,
-6. uložit soubor do adresáře projektu jako:
-
-```text
-credentials.json
-```
-
-Při prvním spuštění se otevře autorizace Google účtu.
-
-Po úspěšné autorizaci vznikne lokální:
-
-```text
-token.json
-```
-
-### Bezpečnost
-
-Soubory
-
-```text
-credentials.json
-token.json
-.env
-```
-
-jsou uvedeny v `.gitignore` a **nejsou součástí GitHub repozitáře**.
-
-Každý uživatel projektu musí použít vlastní Google OAuth credentials.
-
----
-
-## Spuštění
-
-Agent se spouští:
-
-```powershell
-python gmail_agent.py
-```
-
-V terminálu se zobrazí například:
-
-```text
-======================================
-GMAIL AI AGENT
-DRY RUN: False
-LLM: llama3.1:8b
-LLM SERVER: http://<LLM_SERVER>:11434/v1
-======================================
-
-Nalezeno nezpracovaných e-mailů: 3
-```
-
-Následně agent postupně vypisuje klasifikaci jednotlivých zpráv:
-
-```text
-KLASIFIKACE:
-CATEGORY: IMPORTANT
-REASON: Žádost o rozhodnutí.
-
-AKCE: Označeno jako IMPORTANT + AI_PROCESSED.
-```
-
----
-
-## DRY RUN
-
-Pro bezpečné testování je možné použít režim:
-
-```python
-DRY_RUN = True
-```
-
-V tomto režimu agent e-maily analyzuje a vypisuje plánované akce, ale Gmail schránku skutečně neupravuje.
-
-Například:
-
-```text
-AKCE: [DRY RUN] Archivoval bych a přidal AI_PROCESSED.
-```
-
-Pro skutečné provádění akcí:
-
-```python
-DRY_RUN = False
-```
-
-Před prvním ostrým spuštěním doporučuji vždy provést test v režimu `DRY_RUN = True`.
-
----
-
-## Logování
-
-Agent ukládá informace o průběhu běhu také do adresáře:
-
-```text
-logs/
-```
-
-Log obsahuje například:
-
-- čas spuštění,
-- konfiguraci agenta,
-- počet zpracovaných zpráv,
-- odesílatele,
-- předmět,
-- klasifikaci,
-- důvod rozhodnutí,
-- provedenou akci,
-- případné chyby,
-- celkovou dobu běhu.
-
-Adresář `logs/` je uveden v `.gitignore`, takže osobní obsah e-mailů ani provozní logy nejsou nahrávány na GitHub.
-
----
-
-## Struktura projektu
-
-```text
-3_gmail_agent/
-│
-├── gmail_agent.py
-├── requirements.txt
-├── README.MD
-├── .gitignore
-│
-├── credentials.json     # pouze lokálně
-├── token.json           # pouze lokálně
-├── logs/                # pouze lokálně
-└── .venv/               # pouze lokálně
-```
-
----
-
-## Bezpečnost
-
-Repozitář neobsahuje:
-
-- Gmail OAuth credentials,
-- OAuth token,
-- hesla,
-- obsah Gmail schránky,
-- logy zpracovaných e-mailů,
-- interní adresu LLM serveru.
-
-Citlivé soubory jsou vyloučeny pomocí `.gitignore`.
-
----
+Uživatel nemusí znát Gmail query syntax -- potřebný dotaz sestaví agent.
 
 ## Použité technologie
 
-- Python 3.12
-- Gmail API
-- Google OAuth 2.0
-- OpenAI-compatible API
-- lokální LLM
-- llama3.1:8b
-- VS Code
-- Git / GitHub
+-   Python 3.12+
+-   Gmail API + Google OAuth 2.0
+-   OpenAI Agents SDK
+-   Ollama + Llama 3.1 8B
+-   OpenAI-compatible API
+-   Pydantic
+-   BeautifulSoup
+-   asyncio / logging
+-   VS Code
 
----
+## Instalace
 
-## Výsledek
+Vytvoření prostředí a instalace závislostí:
 
-Výsledkem je funkční AI agent napojený na reálnou Gmail schránku.
+``` powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-Agent kombinuje:
+Do složky projektu vlož vlastní Google OAuth soubor:
 
-**Gmail API → Python → LLM → rozhodnutí → nástroj/akce → Gmail**
+``` text
+credentials.json
+```
 
-Nejde tedy pouze o klasifikaci textu pomocí LLM. Model rozhoduje o významu zprávy a agent na základě tohoto rozhodnutí provede odpovídající akci v externím systému.
+Při prvním spuštění proběhne autorizace Gmailu a vytvoří se
+`token.json`.
 
-Projekt byl nejprve ověřen v režimu `DRY_RUN` a následně úspěšně otestován i při skutečných změnách v Gmail schránce.
+Je také nutné nastavit dostupný OpenAI-compatible LLM endpoint a model.
+Projekt byl testován s **Ollama + llama3.1:8b**.
+
+> `credentials.json`, `token.json`, `.venv`, `.env` a logy nejsou
+> součástí GitHub repozitáře.
+
+## Spuštění
+
+``` powershell
+python gmail_agent.py
+```
+
+V `gmail_agent.py` zvol režim:
+
+``` python
+MODE = "cleanup"   # historická pošta
+MODE = "live"      # nové zprávy
+MODE = "chat"      # chat nad Gmailem
+```
+
+Pro první bezpečný test:
+
+``` python
+MODE = "cleanup"
+DRY_RUN = True
+BATCH_SIZE = 20
+```
+
+`DRY_RUN = True` klasifikuje a ukáže plánované akce, ale Gmail skutečně
+nezmění. Po ověření lze nastavit `DRY_RUN = False`.
+
+## Logování a audit
+
+Každý běh vytváří log ve složce `logs/`. Obsahuje klasifikaci, důvod,
+provedenou akci, chyby, retry/fallback a dobu zpracování.
+
+Audit lze dělat přímo v Gmailu:
+
+``` text
+label:AI_IMPORTANT
+label:AI_ADVERTISEMENT
+label:AI_UNCERTAIN
+```
+
+Cleanup lze kdykoliv ukončit pomocí `Ctrl+C`. Již zpracované zprávy
+zůstávají označené `AI_PROCESSED`, takže další spuštění pokračuje pouze
+s nezpracovanými e-maily.
+
+## Bezpečnost
+
+Projekt používá:
+
+-   `DRY_RUN` pro testování,
+-   kontrolu `message_id` a kategorie,
+-   validaci tool callů,
+-   retry + fallback,
+-   žádné automatické mazání,
+-   read-only chat,
+-   logování.
+
+## Struktura projektu
+
+``` text
+3_gmail_agent/
+├── gmail_agent1.1.py
+├── README.md
+├── requirements.txt
+├── .gitignore
+├── credentials.json    # lokální, není v GitHubu
+├── token.json          # lokální, není v GitHubu
+└── logs/               # lokální, není v GitHubu
+```
+
+## Shrnutí
+
+Projekt demonstruje skutečného AI agenta nad reálným externím systémem:
+
+``` text
+LLM + Agent + Tools + Gmail API + reálná data
+```
+
+Agent umí historický cleanup, průběžné zpracování nové pošty a read-only
+chat nad Gmail schránkou. Nejde tedy pouze o LLM klasifikátor -- agent
+používá nástroje a podle výsledku rozhodování provádí řízené Gmail
+operace.
+
+### Poznámka k MCP
+
+MCP bylo při návrhu zvažováno, ale pro tento úkol byly zvoleny nativní
+tools OpenAI Agents SDK. Pro rozsah projektu jde o jednodušší způsob,
+jak demonstrovat agentní rozhodování a tool calling nad Gmail API.
